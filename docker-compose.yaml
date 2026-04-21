@@ -1,0 +1,25 @@
+services:
+  mcp-server:
+    build: .
+    container_name: postgres-hr-mcp
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+    volumes:
+      # mount dbt manifest để update không cần rebuild image
+      - ./dbt:/app/dbt:ro
+    networks:
+      - dev-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  dev-network:
+    external: true
