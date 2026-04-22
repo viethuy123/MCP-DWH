@@ -248,7 +248,9 @@ class MetadataStore:
     # =========================================================================
     # LOAD
     # =========================================================================
-
+    def is_loaded(self) -> bool:
+        return self._loaded
+    
     def load_from_manifest(self, path: str):
         """
         Load từ dbt manifest.json (target/manifest.json sau khi dbt compile/run).
@@ -293,12 +295,15 @@ class MetadataStore:
         return None
 
     def list_tables(self, schema: Optional[str] = None) -> List[TableMeta]:
-        """
-        List tất cả tables, có thể filter theo schema.
-        """
-        if schema:
-            return [t for t in self.tables.values() if t.schema == schema]
-        return list(self.tables.values())
+        # dùng set để deduplicate
+        seen = set()
+        result = []
+        for table in self.tables.values():
+            if table.full_name not in seen:
+                seen.add(table.full_name)
+                if schema is None or table.schema == schema:
+                    result.append(table)
+        return result
 
     def list_table_names(self, schema: Optional[str] = None) -> List[str]:
         return [t.full_name for t in self.list_tables(schema)]
