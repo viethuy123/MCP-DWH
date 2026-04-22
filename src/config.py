@@ -1,7 +1,10 @@
 import os
 from typing import Any, Dict, List, Optional
+from dotenv import load_dotenv
 import sqlglot
 from sqlglot import exp
+
+load_dotenv()
 # from config import MAX_LIMIT
 # =============================================================================
 # DATABASE CONFIGURATION

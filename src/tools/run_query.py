@@ -6,19 +6,12 @@ from sqlglot import exp
 from typing import Dict, Any
 
 from plan_query import plan_query
+from config import DB_CONFIG
 
 
 # =========================
 # CONFIG
 # =========================
-
-DB_CONFIG = {
-    "host": "103.18.7.212",
-    "port": 7003,
-    "dbname": "dwh",
-    "user": "dev_user",
-    "password": "dev_password"
-}
 
 MAX_ROWS = 1000
 QUERY_TIMEOUT_MS = 10000  # 10s
