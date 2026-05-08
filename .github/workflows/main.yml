@@ -1,4 +1,5 @@
 name: Deploy Postgres HR MCP
+
 on:
   push:
     branches: [ main ]
@@ -23,6 +24,9 @@ jobs:
             set -e
             cd /home/user/warehouse/postgres-hr-mcp
             
+            # Đảm bảo Git nhận diện thư mục an toàn
+            git config --global --add safe.directory $(pwd)
+            
             # Lấy SHA hiện tại trước khi pull
             BEFORE_SHA=$(git rev-parse HEAD)
             
@@ -36,18 +40,20 @@ jobs:
             
             # Kiểm tra xem có thay đổi không
             if [ "$BEFORE_SHA" = "$AFTER_SHA" ]; then
-              echo "ℹ️  No changes detected, skipping deployment"
+              echo "ℹ️ No changes detected, skipping deployment"
               exit 0
             fi
             
-            # Kiểm tra các file cấu hình có thay đổi không
-            if git diff --name-only $BEFORE_SHA $AFTER_SHA | grep -qE "(Dockerfile|docker-compose\.ya?ml|requirements\.txt|package\.json)"; then
+            # Kiểm tra các file cấu hình (Dùng || true để grep không làm chết script do set -e)
+            CONFIG_CHANGED=$(git diff --name-only $BEFORE_SHA $AFTER_SHA | grep -qE "(Dockerfile|docker-compose\.ya?ml|requirements\.txt|package\.json)" && echo "yes" || echo "no")
+            
+            if [ "$CONFIG_CHANGED" = "yes" ]; then
               echo "🔨 Config/dependency files changed - Rebuilding containers..."
-              docker-compose down
-              docker-compose up -d --build
+              docker compose down
+              docker compose up -d --build
             else
               echo "📝 Only source code changed - Restarting containers..."
-              docker-compose restart
+              docker compose restart
             fi
             
             # Cleanup old images (optional)
