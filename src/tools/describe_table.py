@@ -75,6 +75,8 @@ def describe_table(table: str) -> Dict[str, Any]:
     )
 
     result["columns_count"] = len(result.get("columns", []))
+    result["foreign_keys_count"] = len(result.get("foreign_keys", []))
+    result["db_foreign_keys_count"] = len(result.get("db_foreign_keys", []))
 
     return result
 

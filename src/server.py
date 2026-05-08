@@ -13,7 +13,7 @@ from starlette.routing import Route, Mount
 from starlette.responses import JSONResponse
 import uvicorn
 
-from metadata import init_metadata
+from metadata import init_metadata, metadata_store
 from tools.list_tables import list_tables
 from tools.describe_table import describe_table
 from tools.get_sample import get_sample
@@ -23,13 +23,17 @@ from tools.run_query import run_query
 from tools.run_metric_query import run_metric_query
 
 DBT_MANIFEST_PATH = os.getenv("DBT_MANIFEST_PATH", "dbt/manifest.json")
+DBT_CATALOG_PATH = os.getenv("DBT_CATALOG_PATH", "dbt/catalog.json")
 
 # =============================================================================
 # INIT
 # =============================================================================
 
 server = Server("postgres-hr")
-init_metadata(DBT_MANIFEST_PATH)
+init_metadata(
+    DBT_MANIFEST_PATH,
+    DBT_CATALOG_PATH if os.path.exists(DBT_CATALOG_PATH) else None,
+)
 
 # =============================================================================
 # TOOLS
@@ -141,7 +145,7 @@ async def handle_list_tools() -> list[Tool]:
                     },
                     "params": {
                         "type": "object",
-                        "description": "Date params. If omitted, defaults to current date/month."
+                        "description": "Date params. If omitted, defaults to current date/month. For headcount trend, use {'last_n_months': 6}."
                     },
                     "group_by": {
                         "type": "array",
@@ -265,6 +269,12 @@ async def handle_list_resources():
             name="DWH Schema Overview",
             description="Schemas, tables, and recommended workflow.",
             mimeType="application/json"
+        ),
+        Resource(
+            uri="dwh://metadata-health",
+            name="DWH Metadata Health",
+            description="Reconciliation status across DB, dbt manifest, and catalog.",
+            mimeType="application/json"
         )
     ]
 
@@ -293,6 +303,17 @@ async def handle_read_resource(uri: str):
             uri=uri,
             mimeType="application/json",
             text=json.dumps(overview, ensure_ascii=False, indent=2)
+        )
+    if uri == "dwh://metadata-health":
+        health = {
+            "load_report": metadata_store.load_report,
+            "available_relations": len(metadata_store.list_tables()),
+            "available_relation_names": metadata_store.list_table_names(),
+        }
+        return ResourceContents(
+            uri=uri,
+            mimeType="application/json",
+            text=json.dumps(health, ensure_ascii=False, indent=2)
         )
     return ResourceContents(uri=uri, mimeType="text/plain", text="Not found")
 

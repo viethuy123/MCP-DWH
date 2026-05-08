@@ -72,6 +72,9 @@ def list_tables(schema: Optional[str] = None) -> Dict[str, Any]:
             "name":          t.name,
             "semantic_type": t.semantic_type,
             "description":   t.description,
+            "materialization": getattr(t, "materialization", ""),
+            "db_table_type": getattr(t, "db_table_type", ""),
+            "db_validated": getattr(t, "db_validated", False),
             "grain":         t.grain,
             "columns_count": len(getattr(t, "columns", [])),
         })

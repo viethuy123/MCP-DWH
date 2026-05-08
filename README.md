@@ -20,6 +20,7 @@ for HR self-serve analytics — no SQL required.
 postgres-hr-mcp/
 ├── README.md
 ├── SKILL.md                        ← architecture spec + build guide for LLMs
+├── PROJECT_LOGIC.md                ← current runtime logic and reading map
 ├── requirements.txt
 ├── .env                            ← DB credentials (git-ignored)
 ├── .env.example
@@ -37,6 +38,14 @@ postgres-hr-mcp/
         ├── run_query.py
         └── get_sample.py
 ```
+
+---
+
+## Recommended Reading Order
+
+1. `PROJECT_LOGIC.md` for the current runtime behavior
+2. `SKILL.md` for the broader architecture and build context
+3. `README.md` for setup and day-to-day usage
 
 ---
 
