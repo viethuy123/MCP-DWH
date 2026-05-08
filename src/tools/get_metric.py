@@ -1,4 +1,5 @@
 from typing import Dict, Any, List, Optional
+
 from metric_registry import (
     get_metric,
     list_metrics,
@@ -7,6 +8,42 @@ from metric_registry import (
     validate_grain,
     resolve_joins_for_grain,
 )
+from metadata import metadata_store
+
+
+def _resolve_group_by_columns(table_name: str, group_by: List[str]) -> List[Dict[str, str]]:
+    resolved = []
+    seen = set()
+
+    for raw_col in group_by:
+        raw_col = raw_col.strip()
+        if not raw_col:
+            continue
+
+        resolved_table = table_name
+        resolved_column = metadata_store.resolve_column_name(table_name, raw_col)
+
+        if not resolved_column:
+            candidates = metadata_store.find_tables_by_column(raw_col)
+            if not candidates:
+                continue
+
+            target = sorted(candidates, key=lambda t: t.full_name)[0]
+            resolved_table = target.full_name
+            resolved_column = metadata_store.resolve_column_name(target.full_name, raw_col) or raw_col
+
+        key = (resolved_table, resolved_column)
+        if key in seen:
+            continue
+        seen.add(key)
+        resolved.append({
+            "input": raw_col,
+            "table": resolved_table,
+            "column": resolved_column,
+            "qualified_name": f"{resolved_table}.{resolved_column}",
+        })
+
+    return resolved
 
 
 def get_metric_tool(
@@ -14,90 +51,62 @@ def get_metric_tool(
     params: Optional[Dict[str, str]] = None,
     group_by: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """
-    MCP Tool: get_metric
-    Trả về definition và rendered SQL unit cho một metric.
+    group_by = group_by or []
+    params = params or {}
 
-    Input:
-        metric_name: tên metric — "headcount", "attrition", "new_hire",
-                                   "absent_days", "tenure"
-                     nếu None → trả về list tất cả metrics
-        params:      date params nếu có — {"target_date": "2024-06-30"}
-                     nếu None → tự resolve về default (CURRENT_DATE hoặc tháng hiện tại)
-        group_by:    list columns muốn GROUP BY — để resolve joins cần thiết
-
-    Output (khi có metric_name):
-        {
-            "metric_name":    "headcount",
-            "metric_type":    "point_in_time",
-            "description":    "...",
-            "table":          "dim.dim_odoo_members",
-            "select_expr":    "COUNT(DISTINCT member_id)",
-            "where_clause":   "official_date <= CURRENT_DATE AND ...",
-            "bindings":       {},
-            "missing_params": [],
-            "required_joins": [...],        ← chỉ joins cần cho group_by đã chỉ định
-            "grain_warnings": [...],        ← columns trong group_by không thuộc grain
-            "aggregation":    {...},
-            "warnings":       [...],
-            "constraints":    [...],
-            "usage_hint":     "SELECT {select_expr} FROM {table} WHERE {where_clause} GROUP BY ..."
-        }
-
-    Output (khi metric_name = None):
-        {
-            "available_metrics": {
-                "headcount":  "...",
-                "attrition":  "...",
-                ...
-            }
-        }
-    """
-
-    # --- list mode ---
     if not metric_name:
         return {
+            "success": True,
             "available_metrics": list_metrics(),
             "hint": (
                 "Call get_metric with a metric_name to get the full definition. "
-                "Use find_metric_by_synonym to look up by Vietnamese term."
+                "Use exact Vietnamese synonyms when needed."
             ),
         }
 
-    # --- lookup ---
-    if not get_metric(metric_name):
-        # thử tìm qua synonym
-        found = find_metric_by_synonym(metric_name)
-        if found:
-            metric_name = found
-        else:
-            return {
-                "error":             f"Metric '{metric_name}' not found.",
-                "available_metrics": list(list_metrics().keys()),
-            }
+    resolved_metric_name = metric_name
+    metric_def = get_metric(resolved_metric_name)
 
-    # --- render ---
-    rendered = render_metric(metric_name, params=params)
+    if not metric_def:
+        synonym_match = find_metric_by_synonym(metric_name)
+        if synonym_match:
+            resolved_metric_name = synonym_match
+            metric_def = get_metric(resolved_metric_name)
+
+    if not metric_def:
+        return {
+            "success": False,
+            "error": f"Metric '{metric_name}' not found.",
+            "available_metrics": list(list_metrics().keys()),
+        }
+
+    rendered = render_metric(resolved_metric_name, params=params)
     if not rendered:
-        return {"error": f"Failed to render metric '{metric_name}'."}
+        return {
+            "success": False,
+            "error": f"Failed to render metric '{resolved_metric_name}'.",
+        }
 
-    # --- grain validation ---
-    group_by       = group_by or []
+    resolved_group_by = _resolve_group_by_columns(rendered["table"], group_by)
+    effective_group_by = [item["column"] for item in resolved_group_by]
+
+    invalid_cols = validate_grain(resolved_metric_name, effective_group_by) if effective_group_by else []
     grain_warnings = []
+    for col in invalid_cols:
+        if metadata_store.table_has_column(rendered["table"], col):
+            continue
 
-    if group_by:
-        invalid_cols = validate_grain(metric_name, group_by)
-        if invalid_cols:
-            grain_warnings = [
-                f"Column '{col}' is not in the defined grain for '{metric_name}'. "
-                f"Valid grain: {rendered['grain']}"
-                for col in invalid_cols
-            ]
+        grain_warnings.append(
+            f"Column '{col}' is not in the preferred grain for '{resolved_metric_name}' "
+            f"and is not present on base table '{rendered['table']}'. "
+            f"Preferred grain: {rendered['grain']}"
+        )
 
-    # --- resolve joins ---
-    required_joins = resolve_joins_for_grain(metric_name, group_by) if group_by else []
+    required_joins = (
+        resolve_joins_for_grain(resolved_metric_name, effective_group_by)
+        if effective_group_by else []
+    )
 
-    # --- usage hint ---
     usage_hint = (
         f"SELECT {rendered['select_expr']} "
         f"FROM {rendered['table']} "
@@ -106,56 +115,26 @@ def get_metric_tool(
     if group_by:
         usage_hint += f" GROUP BY {', '.join(group_by)}"
 
+    warnings = list(rendered["warnings"])
+    warnings.extend(grain_warnings)
+
     return {
-        "metric_name":    rendered["metric_name"],
-        "metric_type":    rendered["metric_type"],
-        "description":    get_metric(metric_name).get("description", ""),
-        "table":          rendered["table"],
-        "select_expr":    rendered["select_expr"],
-        "where_clause":   rendered["where_clause"],   # REQUIRED — dùng cùng select_expr
-        "bindings":       rendered["bindings"],
+        "success": True,
+        "metric_name": rendered["metric_name"],
+        "metric_type": rendered["metric_type"],
+        "description": metric_def.get("description", ""),
+        "table": rendered["table"],
+        "select_expr": rendered["select_expr"],
+        "where_clause": rendered["where_clause"],
+        "bindings": rendered["bindings"],
         "missing_params": rendered["missing_params"],
         "required_joins": required_joins,
+        "group_by_resolved": resolved_group_by,
+        "group_by_effective": effective_group_by,
         "grain_warnings": grain_warnings,
-        "aggregation":    rendered["aggregation"],
-        "warnings":       rendered["warnings"],
-        "constraints":    rendered["constraints"],
-        "usage_hint":     usage_hint,
+        "aggregation": rendered["aggregation"],
+        "warnings": warnings,
+        "constraints": rendered["constraints"],
+        "usage_hint": usage_hint,
+        "resolved_from_synonym": resolved_metric_name != metric_name,
     }
-
-
-# =============================================================================
-# DEBUG
-# =============================================================================
-
-if __name__ == "__main__":
-    from pprint import pprint
-
-    print("=== list all metrics ===")
-    pprint(get_metric_tool())
-
-    print("\n=== headcount (no params) ===")
-    pprint(get_metric_tool("headcount"))
-
-    print("\n=== headcount (with target_date + group_by) ===")
-    pprint(get_metric_tool(
-        "headcount",
-        params={"target_date": "2024-06-30"},
-        group_by=["division_name", "branch_name"]
-    ))
-
-    print("\n=== headcount group_by invalid column ===")
-    pprint(get_metric_tool(
-        "headcount",
-        group_by=["division_name", "etl_datetime"]   # etl_datetime không trong grain
-    ))
-
-    print("\n=== absent_days (resolve joins for division_name) ===")
-    pprint(get_metric_tool(
-        "absent_days",
-        params={"start_date": "2024-01-01", "end_date": "2024-06-30"},
-        group_by=["division_name"]
-    ))
-
-    print("\n=== synonym lookup ===")
-    pprint(get_metric_tool("thâm niên"))   # → tenure
